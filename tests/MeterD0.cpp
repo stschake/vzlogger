@@ -252,7 +252,7 @@ TEST(MeterD0, ACE3000_basic) {
 	writes_hex(fd, "3230303533333232333533290d0a");
 	writes_hex(fd, "432e352e30283030290d0a"); // C.5.0(00)
 	writes_hex(fd, "312e382e30283031333932352e352a29590202010021"); // 1.8.0(01392.5*) ... !
-	writes_hex(fd, "0d0a03467f"); // garbage? (newline and ?)
+	writes_hex(fd, "0d0a03467f"); // (newline and <ETX> <BCC =0x46> garbage...) TODO add BCC check (according to DIN 66219 / IEC 1155, if STX/ETX there should be BCC as well. BCC = xor all from STX (not incl.) to ETX (incl.))
 
 	// now perform one read call:
 	EXPECT_EQ(4, m.read(rds, 4));
