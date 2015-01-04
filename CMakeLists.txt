@@ -56,6 +56,9 @@ OPTION(ENABLE_LOCAL
 OPTION(WITH_READER
   "compile reader to for testing your meters (def=yes)])"
   On)
+OPTION(ENABLE_OCR
+	"enable support for OCR image/processing meter (def=yes)"
+	Off)
 
 # find dependencies
 # libsml
@@ -74,6 +77,14 @@ if(ENABLE_LOCAL)
     set(LOCAL_SUPPORT 1)
   endif(MICROHTTPD_FOUND)
 endif(ENABLE_LOCAL)
+
+if( ENABLE_OCR )
+	message("OCR Meter enabled")
+# TODO install tesseract and leptonica
+# and set include_directories appropriate
+	set(OCR_LIBRARIES lept tesseract)
+	set(OCR_SUPPORT 1)
+endif( ENABLE_OCR )
 
 IF(NOT WIN32)
   include(FindThreads)

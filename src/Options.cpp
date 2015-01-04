@@ -47,10 +47,23 @@ Option::Option(const char *pKey, struct json_object *jso)
 			case json_type_int:	    value.integer = json_object_get_int(jso);     break;
 			case json_type_boolean:	value.boolean = json_object_get_boolean(jso); break;
 			case json_type_double:	value.floating = json_object_get_double(jso); break;
-			default:		throw vz::VZException("Not a valid Type");
+			case json_type_array: value.jso = json_object_get(jso); break;
+			default:		throw vz::VZException("Option::Option Not a valid Type");
 	}
 
 	_type = (type_t)json_object_get_type(jso);
+}
+
+Option::Option(const Option &o) :
+	_key(o._key),
+	_type(o._type),
+	_value_string(o._value_string)
+{
+	if (_type == type_array){
+		value.jso = json_object_get(o.value.jso);
+	}else{
+		value = o.value;
+	}
 }
 
 Option::Option(const char *pKey, char *pValue)
@@ -58,14 +71,11 @@ Option::Option(const char *pKey, char *pValue)
 		, _type(type_string)
 		, _value_string(pValue)
 {
-//_key = strdup(pKey);
-	//value.string = strdup(pValue);
 }
 
 Option::Option(const char *pKey, int pValue)
 		: _key(pKey)
 {
-//_key = strdup(pKey);
 	value.integer = pValue;
 	_type = type_int;
 }
@@ -73,7 +83,6 @@ Option::Option(const char *pKey, int pValue)
 Option::Option(const char *pKey, double pValue)
 		: _key(pKey)
 {
-//_key = strdup(pKey);
 	value.floating = pValue;
 	_type = type_double;
 }
@@ -81,19 +90,16 @@ Option::Option(const char *pKey, double pValue)
 Option::Option(const char *pKey, bool pValue)
 		: _key(pKey)
 {
-//_key = strdup(pKey);
 	value.boolean = pValue;
 	_type = type_boolean;
 }
 
 Option::~Option() {
-//	if (_key != NULL) {
-//		free(_key);
-//	}
-
-	//if (value.string != NULL && _type == type_string) {
-	//	free((void*)(value.string));
-	//}
+	if (_type == type_array){
+		if (value.jso)
+			json_object_put(value.jso);
+			value.jso = 0;
+	}
 }
 
 Option::operator const char *() const {
@@ -118,6 +124,11 @@ Option::operator bool() const {
 	if (_type != type_boolean) throw vz::InvalidTypeException("Invalid type");
 
 	return value.boolean;
+}
+
+Option::operator struct json_object*() const {
+	if (_type != type_array) throw vz::InvalidTypeException("json_object not an array");
+	return value.jso;
 }
 
 //Option& OptionList::lookup(List<Option> options, char *key) {
@@ -153,6 +164,12 @@ double OptionList::lookup_double(std::list<Option> options, const char *key) con
 {
 	Option opt = lookup(options, key);
 	return (double)opt;
+}
+
+struct json_object *OptionList::lookup_json_array(std::list<Option> options, const char *key) const
+{
+	Option opt = lookup(options, key);
+	return (struct json_object *)opt;
 }
 
 void OptionList::dump(std::list<Option> options) {
