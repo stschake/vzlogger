@@ -29,6 +29,8 @@
 	TODO remove unit or implement it
 	TODO move log_error to log_debug
 	TODO use GetComponentImages interface (directly returning BOXA) and change to top/left/width/height?
+	TODO try using pixUnsharpMask()
+	TODO use filter from http://www.jofcis.com/publishedpapers/2011_7_6_1886_1892.pdf for binarization?
 	*/
 
 // #include <stdio.h>
@@ -120,7 +122,7 @@ MeterOCR::BoundingBox::BoundingBox(struct json_object *jb) :
 
 
 MeterOCR::MeterOCR(std::list<Option> options)
-		: Protocol("ocr"), api(NULL), _rotate(0.0)
+		: Protocol("ocr"), api(NULL), _rotate(0.0), _gamma(1.0)
 {
 	OptionList optlist;
 
@@ -141,6 +143,19 @@ MeterOCR::MeterOCR(std::list<Option> options)
 		print(log_error, "Failed to parse 'rotate'", name().c_str());
 		throw;
 	}
+	
+	try {
+		_gamma = optlist.lookup_double(options, "gamma");
+	} catch (vz::OptionNotFoundException &e) {
+		// keep default (1.0)
+	} catch (vz::InvalidTypeException &e) {
+		print(log_error, "Invalid type for 'gamma'", name().c_str());
+		throw;
+	} catch (vz::VZException &e) {
+		print(log_error, "Failed to parse 'gamma'", name().c_str());
+		throw;
+	}
+	
 
 	try {
 		struct json_object *jso = optlist.lookup_json_array(options, "boundingboxes");
@@ -150,7 +165,6 @@ MeterOCR::MeterOCR(std::list<Option> options)
 			// for each object:
 			for (int i = 0; i < nrboxes; i++) {
 				struct json_object *jb = json_object_array_get_idx(jso, i);
-				print(log_error, "type=%d", name().c_str(), json_object_get_type(jb));
 				_boxes.push_back(BoundingBox(jb));
 			}
 		}else{
@@ -245,7 +259,8 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 
 		outfilename=_file;
 		outfilename.append("rot");
-		(void) pixWrite(outfilename.c_str(), image, IFF_DEFAULT);	
+		(void) pixWrite(outfilename.c_str(), image, IFF_DEFAULT);
+		// TODO double check with pixFindSkew? (auto-rotate?)
 	}
 
 	// Convert the RGB image to grayscale
@@ -255,22 +270,25 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 		image = image_gs;
 		image_gs = 0;
 		outfilename=_file;
-		outfilename.append("_s1_gs.png", IFF_PNG);
+		outfilename.append("_s1_gs.png");
 		(void)pixWrite(outfilename.c_str(), image, IFF_PNG);
 	}
 
-/*
-	// Remove the text in the fg.
-	image_gs = pixCloseGray(image, 25, 25);
+	// TODO add support for contrast? image = pixContrastTRC(image, image, 0.7);
+
+
+
+	//image_gs = pixCloseGray(image, 25, 25);
+	image_gs = pixUnsharpMasking( image, 3, 0.5 ); // TODO make a parameter, only useful for blurred images
 	if (image_gs){
 		pixDestroy(&image);
 		image = image_gs;
 		image_gs = 0;
 		outfilename=_file;
-		outfilename.append("_s2_cg.png", IFF_PNG);
+		outfilename.append("_s3_unsharp.png");
 		(void)pixWrite(outfilename.c_str(), image, IFF_PNG);
 	}
-
+/*
 	// Smooth the bg with a convolution
 	image_gs = pixBlockconv(pixc, 15, 15);
 	if (image_gs){
@@ -278,7 +296,7 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 		image = image_gs;
 		image_gs = 0;
 		outfilename=_file;
-		outfilename.append("_s3_bc.png", IFF_PNG);
+		outfilename.append("_s3_bc.png");
 		(void)pixWrite(outfilename.c_str(), image, IFF_PNG);
 	}
 */
@@ -293,39 +311,36 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 		image = image_gs;
 		image_gs = 0;
 		outfilename=_file;
-		outfilename.append("_s4_no.png", IFF_PNG);
+		outfilename.append("_s4_no.png");
 		(void)pixWrite(outfilename.c_str(), image, IFF_PNG);
 	}
 
 	// Increase the dynamic range
 	// make dark gray *black* and light gray *white*
-
-	image_gs = pixGammaTRC(NULL, image, 1.0, 50, 120);
-	if (image_gs){
-		pixDestroy(&image);
-		image = image_gs;
-		image_gs = 0;
+	image = pixGammaTRC(image, image, _gamma, 50, 120); // TODO add parameters for 50 and 120
+	if (image){
 		outfilename=_file;
-		outfilename.append("_s5_dr.png", IFF_PNG);
+		outfilename.append("_s5_gamma.png");
 		(void)pixWrite(outfilename.c_str(), image, IFF_PNG);
 	}
 
 	// Threshold to 1 bpp
 	image_gs = pixThresholdToBinary(image, 120);
+	// pixOtsuAdaptiveThreshold( image, 1000, 1000, 1, 1, 0.1, NULL, &image_gs);
 	if (image_gs){
 		pixDestroy(&image);
 		image = image_gs;
 		image_gs = 0;
 		outfilename=_file;
-		outfilename.append("_s6_bi.png", IFF_PNG);
+		outfilename.append("_s6_bi.png");
 		(void)pixWrite(outfilename.c_str(), image, IFF_PNG);
 	}
 	api->SetImage(image);
 	
 	Pix *dump = api->GetThresholdedImage();
-	outfilename=_file;
-	outfilename.append("thresh.tif");
-    pixWrite(outfilename.c_str(), dump, IFF_TIFF_G4);
+//	outfilename=_file;
+//	outfilename.append("thresh.tif");
+//    pixWrite(outfilename.c_str(), dump, IFF_TIFF_G4);
 
     // get picture size:
     int width = pixGetWidth(image);
@@ -357,22 +372,23 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 			do{
 				const char* word = ri->GetUTF8Text(level);
 				float conf = ri->Confidence(level);
-				int x1, y1, x2, y2;
-				ri->BoundingBox(level, &x1, &y1, &x2, &y2);
-				print(log_error, "word: '%s'; \tconf: %.2f; BoundingBox: %d,%d,%d,%d;\n", name().c_str(),
-					word, conf, x1, y1, x2, y2);
-				if (outtext.length()==0) outtext=word; // TODO choose the one with highest confidence? or ignore if more than 1?
-				delete[] word;	
+				if (conf>15.0){ // TODO see above. add parameter
+					int x1, y1, x2, y2;
+					ri->BoundingBox(level, &x1, &y1, &x2, &y2);
+					print(log_error, "word: '%s'; \tconf: %.2f; BoundingBox: %d,%d,%d,%d;\n", name().c_str(),
+						word, conf, x1, y1, x2, y2);
+					if (outtext.length()==0) outtext=word; // TODO choose the one with highest confidence? or ignore if more than 1?
+					delete[] word;	
 
-				// for debugging draw the box in the picture:
-				BOX *box=boxCreate(x1, y1, x2-x1, y2-y1);
-				boxaAddBox(boxa, box, L_INSERT);
-
+					// for debugging draw the box in the picture:
+					BOX *box=boxCreate(x1, y1, x2-x1, y2-y1);
+					boxaAddBox(boxa, box, L_INSERT);
+				}
 			} while (ri->Next(level));
 		}
 		print(log_error, "%s=%s", name().c_str(), b.identifier.c_str(), outtext.c_str());
-
 		readings[b.identifier] += strtod(outtext.c_str(), NULL) * pow(10, b.scaler);
+		outtext.erase();
 	}
 
 	Pix *bbpix2 = pixDrawBoxa(dump, boxa, 1, 0x00ff0000); // rgba color -> green, detected

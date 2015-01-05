@@ -62,6 +62,7 @@ public:
 	std::string _file;
 	tesseract::TessBaseAPI *api;
 	double _rotate;
+	double _gamma;
 	typedef std::list<BoundingBox> StdListBB;
 	StdListBB _boxes;
 };
