@@ -63,8 +63,12 @@ public:
 	tesseract::TessBaseAPI *api;
 	double _rotate;
 	double _gamma;
+	int _gamma_min;
+	int _gamma_max;
 	typedef std::list<BoundingBox> StdListBB;
 	StdListBB _boxes;
+	int _min_x1, _max_x2, _min_y1, _max_y2;
+	bool _all_digits;
 };
 
 #endif
