@@ -82,6 +82,7 @@ sudo make install
 sudo ldconfig
 cd ..
 wget https://tesseract-ocr.googlecode.com/files/tesseract-ocr-3.02.deu.tar.gz
+tar xzvf tesseract-ocr-3.02.deu.tar.gz
 sudo cp tesseract-ocr/tessdata/deu.traineddata /usr/local/share/tessdata/
 sudo cp tesseract-ocr/tessdata/deu-frak.traineddata /usr/local/share/tessdata/
 
