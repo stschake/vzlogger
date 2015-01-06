@@ -37,7 +37,6 @@ Quick patent check: (no warranties, just my personal opinion, only checked as I 
 	TODO add cache to see whether image changed (e.g. chksum, file date,...)
 	TODO add conf level that has to be achieved otherwise values will be ignored
 	TODO implement digit (just to add more conf by restricting the value to int -9...+9)
-	TODO remove unit or implement it
 	TODO move log_error to log_debug
 	TODO use GetComponentImages interface (directly returning BOXA) and change to top/left/width/height?
 	TODO use filter from http://www.jofcis.com/publishedpapers/2011_7_6_1886_1892.pdf for binarization?
@@ -50,6 +49,7 @@ Quick patent check: (no warranties, just my personal opinion, only checked as I 
 // #include <sys/time.h>
 // #include <errno.h>
 #include <cmath>
+#include <cfloat>
 #include <map>
 
 #include "protocols/MeterOCR.hpp"
@@ -100,8 +100,8 @@ MeterOCR::BoundingBox::BoundingBox(struct json_object *jb) :
 	}else{
 		throw vz::OptionNotFoundException("boundingbox identifier");
 	}
-	if (json_object_object_get_ex(jb, "unit", &value)){
-		unit = json_object_get_string(value);
+	if (json_object_object_get_ex(jb, "confidence_id", &value)){
+		conf_id = json_object_get_string(value);
 	}
 	if (json_object_object_get_ex(jb, "scaler", &value)){
 		scaler = json_object_get_int(value);
@@ -128,8 +128,8 @@ MeterOCR::BoundingBox::BoundingBox(struct json_object *jb) :
 			if (y2<y1) throw vz::OptionNotFoundException("boundingbox y2 < y1");
 		}
 	}
-	print(log_error, "boundingbox <%s>: unit=<%s>, scaler=%d, digit=%d, (%d,%d)-(%d,%d)\n", "ocr",
-		identifier.c_str(), unit.c_str(), scaler, digit? 1 : 0, x1, y1, x2, y2);
+	print(log_error, "boundingbox <%s>: conf_id=%s, scaler=%d, digit=%d, (%d,%d)-(%d,%d)\n", "ocr",
+		identifier.c_str(), conf_id.c_str(), scaler, digit? 1 : 0, x1, y1, x2, y2);
 }
 
 
@@ -169,7 +169,7 @@ MeterOCR::MeterOCR(std::list<Option> options)
 		print(log_error, "Failed to parse 'gamma'", name().c_str());
 		throw;
 	}
-		try {
+	try {
 		_gamma_min = optlist.lookup_int(options, "gamma_min");
 	} catch (vz::OptionNotFoundException &e) {
 		// keep default
@@ -277,6 +277,14 @@ double radians (double d) {
 return d * M_PI / 180; 
 } 
 
+class Reads{
+public:
+	Reads() : value(0.0), min_conf(DBL_MAX) {};
+	double value;
+	std::string conf_id;
+	double min_conf;
+};
+
 ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 
 	unsigned int i = 0;
@@ -302,11 +310,12 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 			image = image_rot;
 			image_rot=0;
 		}
-
+		/* for debugging to see the rotated picture:
 		outfilename=_file;
 		outfilename.append("rot");
 		(void) pixWrite(outfilename.c_str(), image, IFF_DEFAULT);
 		// TODO double check with pixFindSkew? (auto-rotate?)
+		*/
 	}
 
 	// now crop the image if possible:
@@ -426,7 +435,7 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
     int height = pixGetHeight(image);
     print(log_error, "Image size width=%d, height=%d\n", name().c_str(), width, height);
 	
-	std::map<std::string, double> readings;
+	std::map<std::string, Reads> readings;
 	BOXA *boxa = boxaCreate(_boxes.size()); // there can be more, just initial number
 	BOXA *boxb = boxaCreate(_boxes.size());
 
@@ -449,6 +458,7 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 		api->Recognize(0);
 		tesseract::ResultIterator* ri = api->GetIterator();
 		tesseract::PageIteratorLevel level = tesseract::RIL_WORD;
+		double min_conf=DBL_MAX;
 		if (ri != 0){
 			do{
 				const char* word = ri->GetUTF8Text(level);
@@ -457,7 +467,10 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 				ri->BoundingBox(level, &x1, &y1, &x2, &y2);
 				print(log_error, "word: '%s'; \tconf: %.2f; BoundingBox: %d,%d,%d,%d;\n", name().c_str(),
 					word, conf, x1, y1, x2, y2);
-				if (conf>15.0 && outtext.length()==0) outtext=word; // TODO choose the one with highest confidence? or ignore if more than 1?
+				if (conf>15.0 && outtext.length()==0){
+					outtext=word; // TODO choose the one with highest confidence? or ignore if more than 1?
+					if (conf<min_conf) min_conf=conf;
+				}
 				delete[] word;	
 
 				// for debugging draw the box in the picture:
@@ -466,12 +479,18 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 			} while (ri->Next(level));
 		}
 		print(log_error, "%s=%s", name().c_str(), b.identifier.c_str(), outtext.c_str());
+		
+		if (b.conf_id.length()) readings[b.identifier].conf_id=b.conf_id;
+		
 		// if we couldn't read any text mark this as not available (using NAN (not a number))
-		if (outtext.length()==0)
-			readings[b.identifier] = NAN;
-		else
-			readings[b.identifier] += strtod(outtext.c_str(), NULL) * pow(10, b.scaler);
-		outtext.erase();
+		if (outtext.length()==0){
+			readings[b.identifier].value = NAN;
+			readings[b.identifier].min_conf = 0;
+		}else{
+			readings[b.identifier].value += strtod(outtext.c_str(), NULL) * pow(10, b.scaler);
+			if (min_conf<readings[b.identifier].min_conf) readings[b.identifier].min_conf = min_conf;
+			outtext.erase();
+		}
 	}
 
 	Pix *bbpix2 = pixDrawBoxa(dump, boxa, 1, 0x00ff0000); // rgba color -> green, detected
@@ -487,13 +506,22 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 	pixDestroy(&dump);
 
 	// return all readings:
-	for(std::map<std::string, double>::iterator it = readings.begin(); it!= readings.end(); ++it){
-		print(log_error, "returning: id <%s> value <%f>", name().c_str(), it->first.c_str(), it->second);
-		if (!isnan(it->second)){
-			rds[i].value(it->second); // TODO shall we add the unit here or simply don't support units?
+	for(std::map<std::string, Reads>::iterator it = readings.begin(); it!= readings.end(); ++it){
+		const Reads &r=it->second;
+		print(log_error, "returning: id <%s> value <%f>", name().c_str(), it->first.c_str(), r.value);
+		if (!isnan(r.value)){
+			rds[i].value(r.value);
 			rds[i].identifier(new StringIdentifier(it->first));
 			rds[i].time();
 			i++;
+			if (i>=n) break;
+		}
+		if (r.conf_id.length()>0){
+			rds[i].value(r.min_conf);
+			rds[i].identifier(new StringIdentifier(r.conf_id));
+			rds[i].time();
+			i++;
+			if (i>=n) break;
 		}
 	}
 	

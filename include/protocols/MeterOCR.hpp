@@ -53,7 +53,7 @@ class BoundingBox
 public:
 	BoundingBox (struct json_object *jb);
 	std::string identifier;
-	std::string unit;
+	std::string conf_id;
 	int scaler;
 	bool digit;
 	int x1, y1, x2, y2;
