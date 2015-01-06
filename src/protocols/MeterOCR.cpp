@@ -42,6 +42,7 @@ Quick patent check: (no warranties, just my personal opinion, only checked as I 
 	TODO use GetComponentImages interface (directly returning BOXA) and change to top/left/width/height?
 	TODO use filter from http://www.jofcis.com/publishedpapers/2011_7_6_1886_1892.pdf for binarization?
 	TODO check seedfill functions
+	TODO think about using either some trainingdata or e.g. http://www.unix-ag.uni-kl.de/~auerswal/ssocr/ to detect LCD digits.
 	*/
 
 // #include <stdio.h>
@@ -465,7 +466,11 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 			} while (ri->Next(level));
 		}
 		print(log_error, "%s=%s", name().c_str(), b.identifier.c_str(), outtext.c_str());
-		readings[b.identifier] += strtod(outtext.c_str(), NULL) * pow(10, b.scaler);
+		// if we couldn't read any text mark this as not available (using NAN (not a number))
+		if (outtext.length()==0)
+			readings[b.identifier] = NAN;
+		else
+			readings[b.identifier] += strtod(outtext.c_str(), NULL) * pow(10, b.scaler);
 		outtext.erase();
 	}
 
@@ -484,10 +489,12 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 	// return all readings:
 	for(std::map<std::string, double>::iterator it = readings.begin(); it!= readings.end(); ++it){
 		print(log_error, "returning: id <%s> value <%f>", name().c_str(), it->first.c_str(), it->second);
-		rds[i].value(it->second); // TODO shall we add the unit here or simply don't support units?
-		rds[i].identifier(new StringIdentifier(it->first));
-		rds[i].time();
-		i++;
+		if (!isnan(it->second)){
+			rds[i].value(it->second); // TODO shall we add the unit here or simply don't support units?
+			rds[i].identifier(new StringIdentifier(it->first));
+			rds[i].time();
+			i++;
+		}
 	}
 	
 	pixDestroy(&image);
