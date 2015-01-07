@@ -46,6 +46,8 @@ public:
 	ssize_t read(std::vector<Reading> &rds, size_t n);
   
   private:
+	bool initTesseract();
+	bool deinitTesseract();
 
   // class for the parameters:
 class BoundingBox

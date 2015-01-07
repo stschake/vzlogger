@@ -57,7 +57,7 @@ TEST(MeterOCR, basic_scaler)
 	EXPECT_EQ(2, m.read(rds, 2));
 
 	double value = rds[0].value();
-	EXPECT_EQ(4.32, value);
+	EXPECT_TRUE(abs(4.32 -value)<0.001);
 	
 	ReadingIdentifier *p = rds[1].identifier().get();
 	StringIdentifier *o = dynamic_cast<StringIdentifier*>(p);
@@ -228,17 +228,19 @@ TEST(MeterOCR, basic2_not_prepared_digits)
 	]"); // should detect 00434
 	options.push_back(Option("boundingboxes", jso));
 	json_object_put(jso);
+
 	MeterOCR m(options);
 
 	ASSERT_EQ(SUCCESS, m.open());
 
-	std::vector<Reading> rds;
-	rds.resize(1);
-	EXPECT_EQ(1, m.read(rds, 1));
+	for (int i=0; i<4; ++i){
+		std::vector<Reading> rds;
+		rds.resize(1);
+		EXPECT_EQ(1, m.read(rds, 1));
 
-	double value = rds[0].value();
-	EXPECT_EQ(434, value);
-
+		double value = rds[0].value();
+		EXPECT_EQ(434, value);
+	}
 	ASSERT_EQ(0, m.close());
 }
 

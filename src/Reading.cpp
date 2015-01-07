@@ -220,6 +220,7 @@ void StringIdentifier::parse(const char *string) {
 size_t StringIdentifier::unparse(char *buffer, size_t n) {
 	if (_string != "") {
 		strncpy(buffer, _string.c_str(), n);
+		if (n>0) buffer[n-1] = '\0';
 	} else {
 		strncpy(buffer, "", n);
 	}

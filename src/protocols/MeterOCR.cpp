@@ -226,7 +226,14 @@ MeterOCR::MeterOCR(std::list<Option> options)
 	}
 	if (_min_x1<0) _min_x1=0;
 	if (_min_y1<0) _min_y1=0;
+	
+}
 
+
+bool MeterOCR::initTesseract()
+{
+	if (api) deinitTesseract(); // we want to deinit/init in this case on purpose! (see TODO in read)
+	
 	// init tesseract-ocr without specifiying tessdata path
 	api = new tesseract::TessBaseAPI();
 	
@@ -247,12 +254,21 @@ MeterOCR::MeterOCR(std::list<Option> options)
 	api->SetVariable("tessedit_char_whitelist", "0123456789.m"); // TODO think about removing 'm' (should not be within the boundingboxes)
 	api->SetPageSegMode(_all_digits ? tesseract::PSM_SINGLE_CHAR : tesseract::PSM_SINGLE_BLOCK); // PSM_SINGLE_WORD);
 	
+	return true;
+}
+
+bool MeterOCR::deinitTesseract()
+{
+	if (!api) return false;
+	api->End();
+	delete api;
+	api = 0;
+	return true;
 }
 
 MeterOCR::~MeterOCR() {
 	// end tesseract usage:
-	api->End();
-	delete api;
+	deinitTesseract();
 }
 
 int MeterOCR::open() {
@@ -286,14 +302,17 @@ public:
 	double min_conf;
 };
 
-ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
+ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t max_reads) {
 
 	unsigned int i = 0;
 	std::string outtext, outfilename;
 	std::string id;
-	print(log_debug, "MeterOCR::read: %d, %d", name().c_str(), rds.size(), n);
+	print(log_debug, "MeterOCR::read: %d, %d", name().c_str(), rds.size(), max_reads);
 
-	if (n<1) return 0;
+	if (max_reads<1) return 0;
+	
+	// init tesseract (TODO if we do this in the constructor we get corrupted readings after 3-4 read calls....) this is just a workaround
+	if (!initTesseract()) return 0;
 
 	// open image:
 	Pix *image = pixRead(_file.c_str());
@@ -311,12 +330,12 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 			image = image_rot;
 			image_rot=0;
 		}
-		/* for debugging to see the rotated picture:
-		outfilename=_file;
-		outfilename.append("rot");
-		(void) pixWrite(outfilename.c_str(), image, IFF_DEFAULT);
+		// for debugging to see the rotated picture:
+		//outfilename=_file;
+		//outfilename.append("rot");
+		//(void) pixWrite(outfilename.c_str(), image, IFF_DEFAULT);
 		// TODO double check with pixFindSkew? (auto-rotate?)
-		*/
+		
 	}
 
 	// now crop the image if possible:
@@ -333,13 +352,6 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 		pixDestroy(&image);
 		image=image2;
 	}
-
-	// TODO add support for contrast?
-/*	image = pixContrastTRC(image, image, 0.8);
-	outfilename=_file;
-	outfilename.append("_s0_constrast.png");
-	(void)pixWrite(outfilename.c_str(), image, IFF_PNG);	
-*/
 
 	// Convert the RGB image to grayscale
 	Pix *image_gs = pixConvertRGBToLuminance(image);
@@ -372,22 +384,7 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 		(void)pixWrite(outfilename.c_str(), image, IFF_PNG);
 	}
 
- /*
-	image = pixGammaTRC(image, image, _gamma, 50, 200); 
-	outfilename=_file;
-	outfilename.append("_s4_gamma.png");
-	(void)pixWrite(outfilename.c_str(), image, IFF_PNG);
-	
-	pixOtsuAdaptiveThreshold(image, pixGetWidth(image)/4, pixGetHeight(image), 1, 1, 0.1, NULL, &image_gs);
-	if (image_gs){
-		pixDestroy(&image);
-		image = image_gs;
-		image_gs = 0;
-		outfilename=_file;
-		outfilename.append("_s5_otsu.png");
-		(void)pixWrite(outfilename.c_str(), image, IFF_PNG);
-	}
- try the Otsu approach */
+
 	// Normalize for uneven illumination on gray image
 	Pix *pixg=0;
 	pixBackgroundNormGrayArrayMorph(image, NULL, 4, 5, 200, &pixg);
@@ -456,41 +453,43 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 		BOX *box=boxCreate(left, top, w, h);
 		boxaAddBox(boxb, box, L_INSERT);
 
-		api->Recognize(0);
-		tesseract::ResultIterator* ri = api->GetIterator();
-		tesseract::PageIteratorLevel level = tesseract::RIL_WORD;
-		double min_conf=DBL_MAX;
-		if (ri != 0){
-			do{
-				const char* word = ri->GetUTF8Text(level);
-				float conf = ri->Confidence(level);
-				int x1, y1, x2, y2;
-				ri->BoundingBox(level, &x1, &y1, &x2, &y2);
-				print(log_error, "word: '%s'; \tconf: %.2f; BoundingBox: %d,%d,%d,%d;\n", name().c_str(),
-					word, conf, x1, y1, x2, y2);
-				if (conf>15.0 && outtext.length()==0){
-					outtext=word; // TODO choose the one with highest confidence? or ignore if more than 1?
-					if (conf<min_conf) min_conf=conf;
-				}
-				delete[] word;	
+		if (api->Recognize(0)==0){
+			tesseract::ResultIterator* ri = api->GetIterator();
+			tesseract::PageIteratorLevel level = tesseract::RIL_WORD;
+			double min_conf=DBL_MAX;
+			if (ri != 0){
+				do{
+					const char* word = ri->GetUTF8Text(level);
+					float conf = ri->Confidence(level);
+					int x1, y1, x2, y2;
+					ri->BoundingBox(level, &x1, &y1, &x2, &y2);
+					print(log_error, "word: '%s'; \tconf: %.2f; BoundingBox: %d,%d,%d,%d;\n", name().c_str(),
+						word, conf, x1, y1, x2, y2);
+					if (conf>15.0 && outtext.length()==0){
+						outtext=word; // TODO choose the one with highest confidence? or ignore if more than 1?
+						if (conf<min_conf) min_conf=conf;
+					}
+					if (word) delete[] word;	
 
-				// for debugging draw the box in the picture:
-				BOX *box=boxCreate(x1, y1, x2-x1, y2-y1);
-				boxaAddBox(boxa, box, L_INSERT);
-			} while (ri->Next(level));
-		}
-		print(log_error, "%s=%s", name().c_str(), b.identifier.c_str(), outtext.c_str());
+					// for debugging draw the box in the picture:
+					BOX *box=boxCreate(x1, y1, x2-x1, y2-y1);
+					boxaAddBox(boxa, box, L_INSERT);
+				} while (ri->Next(level));
+				delete ri;
+			}
+			print(log_error, "%s=%s", name().c_str(), b.identifier.c_str(), outtext.c_str());
 		
-		if (b.conf_id.length()) readings[b.identifier].conf_id=b.conf_id;
+			if (b.conf_id.length()) readings[b.identifier].conf_id=b.conf_id;
 		
-		// if we couldn't read any text mark this as not available (using NAN (not a number))
-		if (outtext.length()==0){
-			readings[b.identifier].value = NAN;
-			readings[b.identifier].min_conf = 0;
-		}else{
-			readings[b.identifier].value += strtod(outtext.c_str(), NULL) * pow(10, b.scaler);
-			if (min_conf<readings[b.identifier].min_conf) readings[b.identifier].min_conf = min_conf;
-			outtext.erase();
+			// if we couldn't read any text mark this as not available (using NAN (not a number))
+			if (outtext.length()==0){
+				readings[b.identifier].value = NAN;
+				readings[b.identifier].min_conf = 0;
+			}else{
+				readings[b.identifier].value += strtod(outtext.c_str(), NULL) * pow(10, b.scaler);
+				if (min_conf<readings[b.identifier].min_conf) readings[b.identifier].min_conf = min_conf;
+				outtext.clear();
+			}
 		}
 	}
 
@@ -515,14 +514,14 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t n) {
 			rds[i].identifier(new StringIdentifier(it->first));
 			rds[i].time();
 			i++;
-			if (i>=n) break;
+			if (i>=max_reads) break;
 		}
 		if (r.conf_id.length()>0){
 			rds[i].value(r.min_conf);
 			rds[i].identifier(new StringIdentifier(r.conf_id));
 			rds[i].time();
 			i++;
-			if (i>=n) break;
+			if (i>=max_reads) break;
 		}
 	}
 	
