@@ -244,4 +244,41 @@ TEST(MeterOCR, basic2_not_prepared_digits)
 	ASSERT_EQ(0, m.close());
 }
 
+TEST(MeterOCR, basic2_not_prepared_autofix)
+{
+	std::list<Option> options;
+	options.push_back(Option("file", (char*)"tests/meterOCR/img2.png"));
+	options.push_back(Option("rotate", -2.0)); // rotate by -2deg (counterclockwise)
+	struct json_object *jso = json_tokener_parse("[\
+	{\"identifier\": \"water cons\", \"scaler\":4,\"digit\":true, \"box\": {\"x1\": 465, \"x2\": 487, \"y1\": 358, \"y2\": 395}},\
+	{\"identifier\": \"water cons\", \"scaler\":3,\"digit\":true, \"box\": {\"x1\": 502, \"x2\": 525, \"y1\": 358, \"y2\": 395}},\
+	{\"identifier\": \"water cons\", \"scaler\":2,\"digit\":true, \"box\": {\"x1\": 538, \"x2\": 562, \"y1\": 358, \"y2\": 395}},\
+	{\"identifier\": \"water cons\", \"scaler\":1,\"digit\":true, \"box\": {\"x1\": 575, \"x2\": 599, \"y1\": 358, \"y2\": 395}},\
+	{\"identifier\": \"water cons\", \"scaler\":0,\"digit\":true, \"box\": {\"x1\": 610, \"x2\": 637, \"y1\": 358, \"y2\": 395}, \"confidence_id\": \"conf\"}\
+	]"); // should detect 00434
+	options.push_back(Option("boundingboxes", jso));
+	json_object_put(jso);
+	jso = json_tokener_parse("\
+	{\"range\": 20, \"x\": 465, \"y\":395}\
+	");
+	options.push_back(Option("autofix", jso));
+	json_object_put(jso);
+
+	MeterOCR m(options);
+
+	ASSERT_EQ(SUCCESS, m.open());
+
+	for (int i=0; i<1; ++i){
+		std::vector<Reading> rds;
+		rds.resize(2);
+		EXPECT_EQ(2, m.read(rds, 2));
+
+		double value = rds[0].value();
+		EXPECT_EQ(435, value);
+		
+		value = rds[1].value();
+		EXPECT_GT(value, 80.0); // expect conf. >80
+	}
+	ASSERT_EQ(0, m.close());
+}
 

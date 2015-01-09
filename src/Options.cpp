@@ -47,6 +47,7 @@ Option::Option(const char *pKey, struct json_object *jso)
 			case json_type_int:	    value.integer = json_object_get_int(jso);     break;
 			case json_type_boolean:	value.boolean = json_object_get_boolean(jso); break;
 			case json_type_double:	value.floating = json_object_get_double(jso); break;
+			case json_type_object: value.jso = json_object_get(jso); break;
 			case json_type_array: value.jso = json_object_get(jso); break;
 			default:		throw vz::VZException("Option::Option Not a valid Type");
 	}
@@ -59,7 +60,7 @@ Option::Option(const Option &o) :
 	_type(o._type),
 	_value_string(o._value_string)
 {
-	if (_type == type_array){
+	if (_type == type_array || _type == type_object){
 		value.jso = json_object_get(o.value.jso);
 	}else{
 		value = o.value;
@@ -127,12 +128,12 @@ Option::operator bool() const {
 }
 
 Option::operator struct json_object*() const {
-	if (_type != type_array) throw vz::InvalidTypeException("json_object not an array");
+	if (_type != type_array && _type != type_object) throw vz::InvalidTypeException("json_object not an array/object");
 	return value.jso;
 }
 
 //Option& OptionList::lookup(List<Option> options, char *key) {
-const Option &OptionList::lookup(std::list<Option> options, const std::string &key) const {
+const Option &OptionList::lookup(std::list<Option> const &options, const std::string &key) const {
 	for (const_iterator it = options.begin(); it != options.end(); it++) {
 		if (it->key() == key ) {
 			return (*it);
@@ -142,40 +143,50 @@ const Option &OptionList::lookup(std::list<Option> options, const std::string &k
 	throw vz::OptionNotFoundException("Option '"+ std::string(key) +"' not found");
 }
 
-const char *OptionList::lookup_string(std::list<Option> options, const char *key)
+const char *OptionList::lookup_string(std::list<Option> const &options, const char *key)
 {
 	Option opt = lookup(options, key);
 	return (const char*)opt;
 }
 
-int OptionList::lookup_int(std::list<Option> options, const char *key) const
+int OptionList::lookup_int(std::list<Option> const &options, const char *key) const
 {
 	Option opt = lookup(options, key);
 	return (int)opt;
 }
 
-bool OptionList::lookup_bool(std::list<Option> options, const char *key) const
+bool OptionList::lookup_bool(std::list<Option> const &options, const char *key) const
 {
 	Option opt = lookup(options, key);
 	return (bool)opt;
 }
 
-double OptionList::lookup_double(std::list<Option> options, const char *key) const
+double OptionList::lookup_double(std::list<Option> const &options, const char *key) const
 {
 	Option opt = lookup(options, key);
 	return (double)opt;
 }
 
-struct json_object *OptionList::lookup_json_array(std::list<Option> options, const char *key) const
+struct json_object *OptionList::lookup_json_array(std::list<Option> const &options, const char *key) const
 {
 	Option opt = lookup(options, key);
+	if (opt.type() != Option::type_array) throw vz::InvalidTypeException("json_object not an array");
 	return (struct json_object *)opt;
 }
 
-void OptionList::dump(std::list<Option> options) {
+struct json_object *OptionList::lookup_json_object(std::list<Option> const &options, const char *key) const
+{
+	Option opt = lookup(options, key);
+	if (opt.type() != Option::type_object) throw vz::InvalidTypeException("json_object not an object");
+	return (struct json_object *)opt;
+}
+
+
+void OptionList::dump(std::list<Option> const &options) {
 	std::cout<< "OptionList dump\n" ;
 
 	for (const_iterator it = options.begin(); it != options.end(); it++) {
 		std::cout << (*it) << std::endl;
 	}
 }
+

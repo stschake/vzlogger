@@ -35,6 +35,8 @@ namespace tesseract
 	class TessBaseAPI;
 }
 
+typedef struct Pix PIX;
+
 class MeterOCR : public vz::protocol::Protocol {
 
 public:
@@ -48,6 +50,7 @@ public:
   private:
 	bool initTesseract();
 	bool deinitTesseract();
+	bool autofixDetection(PIX *image, int &dX, int &dY);
 
   // class for the parameters:
 class BoundingBox
@@ -71,6 +74,7 @@ public:
 	StdListBB _boxes;
 	int _min_x1, _max_x2, _min_y1, _max_y2;
 	bool _all_digits;
+	int _autofix_range, _autofix_x, _autofix_y;
 };
 
 #endif

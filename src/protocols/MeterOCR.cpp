@@ -42,6 +42,8 @@ Quick patent check: (no warranties, just my personal opinion, only checked as I 
 	TODO use filter from http://www.jofcis.com/publishedpapers/2011_7_6_1886_1892.pdf for binarization?
 	TODO check seedfill functions
 	TODO think about using either some trainingdata or e.g. http://www.unix-ag.uni-kl.de/~auerswal/ssocr/ to detect LCD digits.
+	TODO sanity check if digit used and recognized bb is far too small.
+	TODO check leptonicas 1.71 simple character recognition
 	*/
 
 // #include <stdio.h>
@@ -137,7 +139,8 @@ MeterOCR::BoundingBox::BoundingBox(struct json_object *jb) :
 MeterOCR::MeterOCR(std::list<Option> options)
 		: Protocol("ocr"), api(NULL), _rotate(0.0), _gamma(1.0), _gamma_min(50), _gamma_max(120),
 		_min_x1(INT_MAX), _max_x2(INT_MIN), 
-		_min_y1(INT_MAX), _max_y2(INT_MIN), _all_digits(true)
+		_min_y1(INT_MAX), _max_y2(INT_MIN), _all_digits(true),
+		_autofix_range(0), _autofix_x(-1), _autofix_y(-1)
 {
 	OptionList optlist;
 
@@ -193,6 +196,31 @@ MeterOCR::MeterOCR(std::list<Option> options)
 		throw;
 	}
 
+	try{
+		struct json_object *jso = optlist.lookup_json_object(options, "autofix");
+		print(log_error, "autofix=%s", name().c_str(), jso ? json_object_to_json_string(jso) : "<null>");
+		// range, x, y
+		struct json_object *jv;
+		if (json_object_object_get_ex(jso, "range", &jv)){
+			_autofix_range = json_object_get_int(jv);
+		}
+		if (json_object_object_get_ex(jso, "x", &jv)){
+			_autofix_x = json_object_get_int(jv);
+		}
+		if (json_object_object_get_ex(jso, "y", &jv)){
+			_autofix_y = json_object_get_int(jv);
+		}
+		if (_autofix_range <1 || _autofix_x<_autofix_range || _autofix_y<_autofix_range ){ // all 3 values need to be valid if autofix specified
+			throw vz::OptionNotFoundException("autofix range < 1 or x < range or y < range");
+		}
+	} catch (vz::OptionNotFoundException &e) {
+		// autofix is optional (default none)
+	} catch (vz::VZException &e) {
+		print(log_error, "Failed to parse 'autofix'", name().c_str());
+		throw;
+	}
+	
+
 	try {
 		struct json_object *jso = optlist.lookup_json_array(options, "boundingboxes");
 		print(log_error, "boundingboxes=%s", name().c_str(), jso ? json_object_to_json_string(jso) : "<null>");
@@ -223,6 +251,14 @@ MeterOCR::MeterOCR(std::list<Option> options)
 		if (b.y1<_min_y1) _min_y1=b.y1;
 		if (b.y2>_max_y2) _max_y2=b.y2;
 		if (!b.digit) _all_digits=false;
+	}
+	
+	// extend by autorange:
+	if (_autofix_range>0){
+		if (_autofix_x-_autofix_range < _min_x1) _min_x1 = _autofix_x-_autofix_range;
+		if (_autofix_y-_autofix_range < _min_y1) _min_y1 = _autofix_y-_autofix_range;
+		if (_autofix_x+_autofix_range > _max_x2) _max_x2 = _autofix_x+_autofix_range;
+		if (_autofix_y+_autofix_range > _max_y2) _max_y2 = _autofix_y+_autofix_range;
 	}
 	if (_min_x1<0) _min_x1=0;
 	if (_min_y1<0) _min_y1=0;
@@ -338,6 +374,18 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t max_reads) {
 		
 	}
 
+	// now do autofix detection:
+	// this works by scanning for two edges and moving the image relatively so that the two edges cross inside the (x/y) position
+	// We do this before cropping
+	// and later crop again towards the detected center
+	int autofix_dX=0, autofix_dY=0;
+	if (_autofix_range>0){
+		// TODO add search direction. now we do from left to right and from bottom to top
+		// TODO add parameter for edge intensity/threshold
+		autofixDetection(image, autofix_dX, autofix_dY);
+	}
+
+
 	// now crop the image if possible:
 	if (_min_x1>0 || _max_x2>0 || _min_y1>0 || _max_y2>0){
 		int w = _max_x2>0 ? _max_x2 : pixGetWidth(image);
@@ -348,7 +396,7 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t max_reads) {
 		PIX *image2 = pixCreate(w, h, pixGetDepth(image));
 		pixCopyResolution(image2, image);
 		pixCopyColormap(image2, image);
-		pixRasterop(image2, 0, 0, w, h, PIX_SRC, image, _min_x1, _min_y1);
+		pixRasterop(image2, 0, 0, w, h, PIX_SRC, image, _min_x1+autofix_dX, _min_y1+autofix_dY);
 		pixDestroy(&image);
 		image=image2;
 	}
@@ -436,6 +484,17 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t max_reads) {
 	std::map<std::string, Reads> readings;
 	BOXA *boxa = boxaCreate(_boxes.size()); // there can be more, just initial number
 	BOXA *boxb = boxaCreate(_boxes.size());
+	
+	// add autofix target to boxb (blue) and found to boxa(green)
+	if (_autofix_range>0){
+		int cx = _autofix_x - _min_x1 - autofix_dX;
+		int cy = _autofix_y - _min_y1 - autofix_dY;
+		boxaAddBox(boxb, boxCreate(cx - _autofix_range, cy - _autofix_range, 2* _autofix_range, 2*_autofix_range), L_INSERT);
+		if (_autofix_range>1){ // add the center
+			boxaAddBox(boxb, boxCreate(cx,cy, 1, 1), L_INSERT);
+		}
+		boxaAddBox(boxa, boxCreate(cx+autofix_dX, cy+autofix_dY, 1, 1), L_INSERT);
+	}
 
 	// now iterate for each bounding box defined:
 	for (StdListBB::iterator it = _boxes.begin(); it != _boxes.end(); ++it){ // let's stick to begin not cbegin (c++11)
@@ -528,5 +587,70 @@ ssize_t MeterOCR::read(std::vector<Reading> &rds, size_t max_reads) {
 	pixDestroy(&image);
 
 	return i;
+}
+
+bool MeterOCR::autofixDetection(Pix *image_org, int &dX, int&dY)
+{
+	std::string outfilename;
+
+	// now do autofix detection:
+	// this works by scanning for two edges and moving the image relatively so that the two edges cross inside the (x/y) position
+	// We do this before cropping
+	// and later crop again towards the detected center
+	if (_autofix_range>0){		
+		int w = 2*_autofix_range+1;
+		// 1.step: crop the small detection area
+		PIX *img = pixCreate(w, w, pixGetDepth(image_org));
+		pixCopyResolution(img, image_org);
+		pixCopyColormap(img, image_org);
+		pixRasterop(img, 0, 0, w, w, PIX_SRC, image_org, _autofix_x-_autofix_range, _autofix_y-_autofix_range);		
+		// don't destroy image, we don't take the ownership
+		
+		// 2nd step: change to grayscale
+		Pix *image_gs = pixConvertRGBToLuminance(img);
+		if (image_gs){
+			pixDestroy(&img);
+			outfilename=_file;
+			outfilename.append("_autofix_s2_gs.png");
+			(void)pixWrite(outfilename.c_str(), image_gs, IFF_PNG);
+		}
+		
+		// 3rd step pixTwoSidedEdgeFilter
+		Pix *imgEdgeV = pixTwoSidedEdgeFilter(image_gs, L_VERTICAL_EDGES);
+		Pix *imgEdgeH = pixTwoSidedEdgeFilter(image_gs, L_HORIZONTAL_EDGES);
+		pixDestroy(&image_gs);
+		if (!imgEdgeV || !imgEdgeH) {
+			if (imgEdgeV) pixDestroy(&imgEdgeV);
+			if (imgEdgeH) pixDestroy(&imgEdgeH);
+			return false;
+		}
+
+		// 4th step: pixThresholdToBinary
+		Pix *imgBinV = pixThresholdToBinary(imgEdgeV, 40);
+		pixDestroy(&imgEdgeV);
+		Pix *imgBinH = pixThresholdToBinary(imgEdgeH, 40);
+		pixDestroy(&imgEdgeH);
+		
+		// 5th step: determine min for pixGetLastOffPixel
+		int minOnX = w; int minOnY = -1;
+		for (int i=0; i<w; ++i){
+			int mX=w, mY=w;
+			pixGetLastOnPixelInRun(imgBinV, 0, i, L_FROM_LEFT, &mX);
+			pixGetLastOnPixelInRun(imgBinH, i, w-1, L_FROM_BOT, &mY);			
+			if (mX<minOnX) minOnX=mX;
+			if (mY>minOnY) minOnY=mY;
+		}
+		pixDestroy(&imgBinV);
+		pixDestroy(&imgBinH);
+		
+		if (minOnX>=0 && minOnX<w && minOnY>=0 && minOnY<w){
+			dX = - _autofix_range + minOnX;
+			dY = - _autofix_range + minOnY;
+			print(log_error, "autofixDetection: dX=%d, dY=%d\n", name().c_str(), dX, dY);
+			return true;
+		}
+		print(log_error, "autofixDetection: not found!\n", name().c_str());
+	}
+	return false;
 }
 
