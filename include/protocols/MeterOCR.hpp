@@ -28,6 +28,8 @@
 #define _MeterOCR_H_
 
 #include <stdio.h>
+#include <cfloat>
+#include <map>
 #include <protocols/Protocol.hpp>
 
 namespace tesseract
@@ -36,6 +38,17 @@ namespace tesseract
 }
 
 typedef struct Pix PIX;
+typedef struct Pixa PIXA;
+
+class Reads{
+public:
+	Reads() : value(0.0), min_conf(DBL_MAX) {};
+	double value;
+	std::string conf_id;
+	double min_conf;
+};
+
+typedef std::map<std::string, Reads> ReadsMap;
 
 class MeterOCR : public vz::protocol::Protocol {
 
@@ -48,9 +61,8 @@ public:
 	ssize_t read(std::vector<Reading> &rds, size_t n);
   
   private:
-	bool initTesseract();
-	bool deinitTesseract();
-	bool autofixDetection(PIX *image, int &dX, int &dY);
+
+	bool autofixDetection(PIX *image, int &dX, int &dY, PIXA *debugPixa);
 
   // class for the parameters:
 class BoundingBox
@@ -64,16 +76,50 @@ public:
 	int x1, y1, x2, y2;
 };
 
-	std::string _file;
+typedef std::list<BoundingBox> StdListBB;
+
+class Recognizer
+{
+public:
+	Recognizer(const std::string &type) : _type(type) {};
+	virtual bool recognize(PIX *image, int dX, int dY, ReadsMap &reads, PIXA *debugPixa ) = 0;
+	virtual ~Recognizer(){};
+protected:
+	void saveDebugImage(PIXA* debugPixa, PIX* img, const char *title);
+	std::string _type;
+};
+
+class RecognizerTesseract : public Recognizer
+{
+public:
+	RecognizerTesseract(struct json_object *);
+	bool recognize(PIX *image, int dX, int dY, ReadsMap &reads, PIXA *debugPixa );
+	virtual ~RecognizerTesseract();
+protected:
+	bool initTesseract();
+	bool deinitTesseract();
+	
 	tesseract::TessBaseAPI *api;
-	double _rotate;
 	double _gamma;
 	int _gamma_min;
 	int _gamma_max;
-	typedef std::list<BoundingBox> StdListBB;
-	StdListBB _boxes;
 	int _min_x1, _max_x2, _min_y1, _max_y2;
 	bool _all_digits;
+	StdListBB _boxes;
+	
+};
+
+class RecognizerNeedle : public Recognizer
+{
+public:
+	RecognizerNeedle(struct json_object *);
+	bool recognize(PIX *image, int dX, int dY, ReadsMap &reads, PIXA *debugPixa );
+	virtual ~RecognizerNeedle();	
+};
+
+	std::string _file;
+	double _rotate;
+	std::list<Recognizer*> _recognizer;
 	int _autofix_range, _autofix_x, _autofix_y;
 };
 
